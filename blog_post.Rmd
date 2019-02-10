@@ -1,0 +1,1108 @@
+---
+title: "Analiza ofert pracy"
+author: "Łukasz Prokulski"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    fig_height: 8
+    fig_width: 10
+    fig_align: "center"
+    self_contained: no
+---
+
+# Zebranie danych
+# Analiza
+## Ogólna charakterystyka
+### Liczba ofert wg województwa
+### Liczba ofert wg kategorii
+### Najpopularniejsze kategorie w województwach
+### Najpopularniejsze województwa wg kategorii
+## Praca w IT
+### jakie kategorie
+### jakie słowa w ofertach (technologie)
+### jakie słowa w ML
+## Stanowiska
+### Najpopularniejsze nazwy stanowisk
+### Kategoria vs nazwa stanowiska
+### Jakie stanowiska dla IT/ML
+## Zarobki
+### Zarobki vs stanowisko
+### Zarobki vs województwo
+## Treść
+### Słowa w opisach
+### Bigramy
+### Podobieństwo kategorii na podstawie opisów
+### Podobieństwo technologii w IT na podstawie treści ofert
+#### Charakterystyczne zwroty
+
+
+----- 
+
+Dane zgromadzone 8-10.02.2019 r.
+
+```{r document_setup, echo=FALSE, message=FALSE, error=FALSE, warning=FALSE}
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+
+# chunks options
+opts_chunk$set(message = FALSE, error = FALSE, warning = FALSE)
+options(knitr.table.format = "html") 
+
+source("/home/lemur/RProjects/!Rmarkdown_templates/da_plot.R")
+```
+
+## Zebranie danych
+
+
+Zebranie linków do ogłoszeń
+
+```{r eval = FALSE}
+library(tidyverse)
+library(rvest)
+library(glue)
+
+base_page_url <- "https://www.pracuj.pl/praca?pn="
+
+N_pages <- 688
+
+safe_read_html <- safely(read_html)
+
+all_links <- vector("character")
+
+for(i in seq_len(N_pages)) {
+  cat(glue("Wczytuje {i} stronę indeksu"))
+  
+  page_url <- glue("{base_page_url}{i}")
+  
+  page <- safe_read_html(page_url)
+  
+  if(is_null(page$error)) {
+    page <- page$result
+    
+    links <- page %>%
+      html_nodes("div.results > ul.results__list-container > li.results__list-container-item") %>%
+      html_node("a.offer__click-area") %>%
+      .[!is.na(.)] %>%
+      html_attr("href")
+    
+    all_links <- c(all_links, links)
+    
+    cat(" - gotowe\r")
+  } else {
+    cat(" - błąd\n")
+  }
+}
+
+all_links <- unique(all_links)
+all_links <- paste0("https://www.pracuj.pl", all_links)
+
+saveRDS(all_links, file = "offer_urls.rds")
+```
+
+Zebranie treści ogłoszeń
+
+```{r eval = FALSE}
+library(tidyverse)
+library(rvest)
+library(glue)
+
+safe_read_html <- safely(read_html)
+
+get_offet_details <- function(offer_url) {
+  offer_page <- safe_read_html(offer_url)
+  
+  if(is_null(offer_page$error)) {
+    offer_page <- offer_page$result
+    
+    # tytuł oferty
+    offer_title <- offer_page %>% html_nodes("h1#offerTitle") %>% html_text() %>% str_trim()
+    
+    # treść oferty
+    offer_text <- offer_page %>%
+      # treść jest w tabeli
+      html_node("table#offTable") %>%
+      # div w opisem oferty
+      html_node("div#description") %>%
+      # traktujemy to jako HTML
+      as.character() %>%
+      # usuwamy tagi htmla
+      str_replace_all("<[^>]*>|\n|\r", " ") %>%
+      str_squish()
+    
+    # parametry oferty
+    offer_params <- offer_page %>%
+      html_node("div.content") %>%
+      html_nodes("script") %>%
+      .[[2]] %>%
+      html_text() %>%
+      str_split("\r\n") %>%
+      unlist() %>%
+      .[nchar(.) != 0]
+    
+    offer_category <- str_sub(offer_params[1], 37, nchar(offer_params[1])-2)
+    offer_localization <- str_sub(offer_params[2], 39, nchar(offer_params[2])-2)
+    offer_grade <- str_sub(offer_params[3], 34, nchar(offer_params[3])-2)
+    offer_company <- str_sub(offer_params[4], 39, nchar(offer_params[4])-2)
+    
+    return(tibble(company = offer_company,
+                  title = offer_title,
+                  grade = offer_grade,
+                  localization = offer_localization,
+                  category = offer_category,
+                  body = offer_text))
+  } else {
+    return(tibble())
+  }
+}
+
+all_links <- readRDS("offer_urls.rds")
+
+# czy sa zapisane jakies dane?
+newest_file <- list.files("data/")
+
+if(length(newest_file) == 0) {
+  # nie ma - zaczynamy od poczatku
+  offers <- tibble()
+  start_i <- 1
+} else {
+  # sa - zaczynamy od ostatnio zapisanego ogloszenia
+  newest_file <- newest_file %>% sort(decreasing = TRUE) %>% .[[1]]
+  newest_file <- paste0("data/", newest_file)
+  offers <- readRDS(newest_file)
+  start_i <- max(offers$i) + 1
+}
+
+for(i in start_i:length(all_links)) {
+  cat(glue("Grabbing offer no {i}"))
+  
+  temp_offer <- get_offet_details(all_links[[i]]) %>% mutate(i = i)
+  cat(" - done\r")
+  
+  offers <- bind_rows(offers, temp_offer)
+  
+  if(i %% 25 == 0) {
+    saveRDS(offers, file = format(Sys.time(), "data/grabbed_offers_%Y_%m_%m_%H%M.rds"))
+    cat("\nData file saved!\n")
+  }
+  
+  Sys.sleep(5)
+}
+```
+
+
+To są prostrze wersje skryptów, zbierające po około 10 pierwszych wyników z każdej ze stron indeksu. Nieco bardziej rozbudowane pozwalają na zebranie pełnej listy ogłoszeń z każdej strony z wynikami. Skrypt zbierający treśc oferty w pełnej wersji jest również nieco rozbudowany co pozwala na zgromadzenie dodatkowych informacji. Ot, słodka tajemnica, a wiedza kosztuje ;)
+
+## Analiza
+
+Przygotowanie słowników
+
+```{r}
+# manipulacje danymi:
+library(tidyverse)
+
+# tekst:
+library(tidytext)
+library(wordcloud)
+
+# korelacja w długich tabelach
+library(widyr)
+
+# mapy
+library(sf)
+
+# tabele
+library(knitr)
+library(kableExtra)
+
+# słowniki
+pl_stop_words <- read_lines("~/RProjects/!polimorfologik/polish_stopwords.txt")
+stem_dict <- readRDS("~/RProjects/!polimorfologik/polimorfologik.RDS")
+
+# mapa województw
+poland_map <- read_sf("~/RProjects/!mapy_shp/wojewodztwa.shp") %>%
+  select(jpt_nazwa_, geometry)
+
+# dane o ludności z GUS
+# https://bdl.stat.gov.pl/BDL/metadane/metryka/2137
+poland_ludnosc <- read_csv("~/RProjects/!daneGUS/Ludnosc_wg_plci_wieku_2017.csv",
+                           col_types = "cccc-i",
+                           col_names = c("TERYT", "nazwa", "wiek", "plec", "liczba"),
+                           skip = 1) %>%
+  filter(wiek %in% c( "20-24", "25-29", "30-34", "35-39",
+                      "40-44", "45-49", "50-54", "55-59",
+                      "60-64")) %>%
+  filter(str_to_lower(nazwa) %in% poland_map$jpt_nazwa_) %>%
+  group_by(nazwa) %>%
+  summarise(liczba = sum(liczba)) %>%
+  ungroup() %>%
+  mutate(nazwa = str_to_lower(nazwa))
+```
+
+
+Wczytanie i oczyszczenie danych
+
+```{r}
+# szukamy najnowszego pliku ze zgromadzonymi danymi
+offers <- list.files("data/") %>%
+  sort(decreasing = TRUE) %>%
+  .[[1]] %>%
+  paste0("data/", .) %>%
+  # i wczytujemy go
+  readRDS()
+
+# funkcja rozbija tagi
+make_tag_list <- function(x) {
+  str_split(x, ", ") %>% unlist() %>% unique()
+}
+
+# czyszczenie danych
+offers <- offers %>%
+  distinct(i, .keep_all = TRUE) %>%
+  # poprawa pl-literek
+  mutate(localization = str_replace_all(localization, "&#243;", "ó"),
+         category = str_replace_all(category, "&#243;", "ó"),
+         company = str_replace_all(company, "&#243;", "ó"),
+         company = str_replace_all(company, "&#211;", "Ó"),
+         company = str_replace_all(company, "&amp;", "&"),
+         body = str_replace_all(body, "&amp;", "&")) %>%
+  # dodanie kolumny z wojewodztwem
+  mutate(woj = str_split(localization, ", ") %>%
+           # wojewodztwo to ostatni czlon w lokalizaji
+           map_chr(.f = function(x) { x[[length(x)]] })) %>%
+  # dodanie kolumny listą tagów z kategorii
+  mutate(tag = map(category, make_tag_list)) %>%
+  mutate_at(.vars = vars(company, category, woj), .funs = str_trim) %>%
+  mutate(salary = str_replace_all(salary, " zł brutto", "")) %>%
+  mutate(salary = factor(salary,
+                         levels = c("empty", "do 2 tys.", "2 - 4 tys.", "4 - 6 tys.", "6 - 8 tys.",
+                                    "8 - 10 tys.", "10 - 12 tys.", "12 - 15 tys.", "powyżej 15 tys."),
+                         labels = c("empty", "do 2 tys.", "2-4 tys.", "4-6 tys.", "6-8 tys.",
+                                    "8-10 tys.", "10-12 tys.", "12-15 tys.", "powyżej 15 tys.")))
+```
+
+Tylko polskie oferty
+
+```{r}
+# tylko polskie oferty
+# wojewodztwa, ktore mają małą literę na początku
+offers_pl <- offers %>%
+  filter(str_sub(woj, 1, 1) != str_to_upper(str_sub(woj, 1, 1)) & woj != "zagranica")
+
+n_offers <- nrow(offers)
+
+rm(offers)
+
+n_pl_offers <- nrow(offers_pl)
+```
+
+
+Łącznie mamy `r n_pl_offers` ofert z pracą na terenie Polski (z `r n_offers` wszystkich).
+
+
+# Najpopularniejsze kategorie ogłoszeń
+
+```{r pracuj_01, fig.height = 9, fig.width = 10}
+offers_tags <- offers_pl %>%
+  unnest(tag) %>%
+  count(tag) %>%
+  mutate(p = 100*n/sum(n)) %>%
+  arrange(p)
+
+plt <- offers_tags %>%
+  mutate(tag = fct_inorder(tag)) %>%
+  ggplot() +
+  geom_col(aes(tag, p), fill = "lightgreen", color = "gray50", size = 0.1) +
+  geom_text(aes(tag, p, label = sprintf("%.1f%%", p)),
+            color = "gray10", hjust = -0.1, vjust = "middle", size = 3) +
+  coord_flip() +
+  labs(title = "Liczba ogłoszeń według branży",
+       subtitle = paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "Procent zebranych ogłoszeń")
+
+da_plot(plt)
+```
+
+
+# liczba ofert pracy wg województwa
+
+```{r pracuj_04, fig.height = 8, fig.width = 8}
+plt <- offers_pl %>%
+  select(woj) %>%
+  count(woj) %>%
+  left_join(poland_map, by = c("woj" = "jpt_nazwa_")) %>%
+  mutate(center = st_centroid(geometry)) %>%
+  ggplot() +
+  geom_sf(aes(geometry = geometry, fill = n), color = "gray75", show.legend = FALSE) +
+  geom_sf_label(aes(geometry = center, label = n), color = "black", fill = "white") +
+  scale_fill_viridis_c(option = "B") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank()) +
+  labs(title = "Liczba ofert pracy według województwa",
+       subtitle = paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "")
+
+da_plot(plt, blank_x = T, blank_y = T)
+```
+
+# liczba ofert w przeliczeniu na liczbę mieszkańców
+
+```{r pracuj_05, fig.width = 8, fig.height = 8}
+offers_count <- offers_pl %>%
+  select(woj) %>%
+  count(woj)
+
+n_pl_offers <- sum(offers_count$n)
+
+plt <- offers_count %>%
+  left_join(poland_map, by = c("woj" = "jpt_nazwa_")) %>%
+  left_join(poland_ludnosc,  by = c("woj" = "nazwa")) %>%
+  mutate(p = 10000* n/liczba) %>%
+  mutate(center = st_centroid(geometry)) %>%
+  ggplot() +
+  geom_sf(aes(geometry = geometry, fill = p), color = "gray75", show.legend = FALSE) +
+  geom_sf_label(aes(geometry = center,
+                    label = sprintf("%d (%.2f)", n, p)),
+                color = "black", fill = "white", size = 3) +
+  scale_fill_viridis_c(option = "B") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank()) +
+  labs(title = "Liczba ofert pracy według województwa",
+       subtitle =  paste0("Opis na mapie: liczba ofert (liczba ofert na 10 tys. mieszkańców w wieku 20-64 lata)\nNa podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "")
+
+da_plot(plt, blank_x = T, blank_y = T)
+```
+
+
+# Praca w IT - jaki obszar wg województwa
+
+```{r pracuj_03, fig.height = 8, fig.width = 10}
+offers_tag_woj <- offers_pl %>%
+  select(woj, tag) %>%
+  unnest(tag) %>%
+  count(woj, tag)
+
+plt <- offers_tag_woj %>%
+  filter(str_detect(tag, "IT - ")) %>%
+  ggplot() +
+  geom_col(aes(woj, n, fill = tag),
+           position = position_dodge(),
+           color = "gray50", size = 0.1) +
+  coord_flip() +
+  labs(title = "Liczba ofert pracy w IT według województwa",
+       subtitle =  paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "Liczba ofert", fill = "Dziedzina:")
+
+da_plot(plt, legend_bottom = T)
+```
+
+
+# Liczba ofert pracy w Pracuj.pl według tagów
+
+
+
+# najpopularniejsze kategorie wg województw
+
+```{r pracuj_07, fig.width = 12, fig.height = 8}
+plt <- offers_tag_woj %>%
+  group_by(woj) %>%
+  mutate(n = 100*n/sum(n)) %>%
+  top_n(3, n) %>%
+  ungroup() %>%
+  ggplot() +
+  geom_col(aes(tag, n, fill = tag), show.legend = FALSE, color = "gray50", size = 0.1) +
+  geom_text(aes(tag, n, label = sprintf("%.1f%%", n)),
+            color = "gray10", hjust = 1.1, vjust = "middle", size = 4) +
+  coord_flip() +
+  facet_wrap(~woj, scales = "free_y") +
+  labs(title = "Najpopularniejsze branże według województw",
+       subtitle =  paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "Procent ofert w województwie")
+
+da_plot(plt)
+```
+
+# j/w bez najpopularniejszych branż
+
+```{r pracuj_08, fig.width = 13, fig.height = 8}
+plt <- offers_tag_woj %>%
+  group_by(woj) %>%
+  mutate(n = 100*n/sum(n)) %>%
+  ungroup() %>%
+  filter(!tag %in% c("Sprzedaż", "Obsługa klienta", "Praca fizyczna", "Finanse / Ekonomia")) %>%
+  group_by(woj) %>%
+  top_n(3, n) %>%
+  ungroup() %>%
+  ggplot() +
+  geom_col(aes(tag, n, fill = tag), color = "gray50", size = 0.1, show.legend = FALSE) +
+  geom_text(aes(tag, n, label = sprintf("%.1f%%", n)),
+            color = "gray10", hjust = 1.1, vjust = "middle", size = 4) +
+  coord_flip() +
+  facet_wrap(~woj, scales = "free_y") +
+  labs(title = "Najpopularniejsze branże według województw",
+       subtitle =  paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "Procent ofert w województwie")
+
+da_plot(plt)
+```
+
+# najpopularniejsza kategoria wg województwa
+
+```{r pracuj_02, fig.width = 14, fig.height = 10}
+plt <- offers_tag_woj %>%
+  filter(!tag %in% c("Sprzedaż", "Obsługa klienta")) %>%
+  group_by(woj) %>%
+  mutate(n = 100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot() +
+  geom_tile(aes(woj, tag, fill = n), color = "gray50", size = 0.1) +
+  geom_text(aes(woj, tag, label = round(n, 1))) +
+  scale_fill_distiller(palette = "YlOrBr") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0)) +
+  labs(title = "Popularnośc branż w zależności od województwa",
+       subtitle =  paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "", fill = "Procent ofert w województwie")
+
+da_plot(plt, legend_bottom = T)
+```
+
+
+```{r pracuj_06, fig.width=16, fig.height=16}
+plt <- offers_tag_woj %>%
+  group_by(woj) %>%
+  mutate(n = 100*n/sum(n)) %>%
+  ungroup() %>%
+  group_by(tag) %>%
+  mutate(p = 100*n/sum(n)) %>%
+  ungroup() %>%
+  left_join(poland_map, by = c("woj" = "jpt_nazwa_")) %>%
+  ggplot() +
+  geom_sf(data = poland_map, aes(geometry = geometry), fill = "white", color = "gray75") +
+  geom_sf(aes(geometry = geometry, fill = p), color = "gray75") +
+  scale_fill_viridis_c(option = "B") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank()) +
+  labs(title = "Liczba ofert pracy według województwa w podziale na branże",
+       subtitle =  paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "", fill = "Procent ofert pracy w województwie") +
+  facet_wrap(~tag)
+
+da_plot(plt, blank_x = T, blank_y = T, legend_bottom = T)
+```
+# popularność słów w opisach
+
+```{r}
+words <- offers_pl %>%
+  unnest_tokens("word", body, token = "words")
+
+words_clean <- words %>%
+  # pl stop words
+  filter(!word %in% pl_stop_words) %>%
+  # angielskie stop words
+  filter(!word %in% stop_words$word) %>%
+  # liczby
+  filter(is.na(as.numeric(word))) %>%
+  # stemming słów
+  left_join(stem_dict, by = c("word" = "word")) %>%
+  # jeśli nie udało się znaleźc formy podstawowej to bierzemy oryginalne słowo
+  mutate(stem = if_else(is.na(stem), word, stem)) %>%
+  select(-word) %>%
+  rename(word = stem) %>%
+  filter(!is.na(word))
+```
+
+```{r pracuj_09,fig.height = 6, fig.width = 10}
+# najpopularniejsze słowa w ogłoszeniach
+plt <- words_clean %>%
+  count(word) %>%
+  top_n(50, n) %>%
+  mutate(word = fct_reorder(word, -n)) %>%
+  ggplot() +
+  geom_col(aes(word, n/n_pl_offers), fill = "lightgreen", color = "gray50", size = 0.1) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0)) +
+  labs(title = "Najpopularniejsze słowa w ofertach pracy",
+       subtitle =  paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "Średnia częstośc wystąpień słowa w ofercie")
+
+da_plot(plt)
+```
+
+Machine Learning i IT
+
+```{r pracuj_10, fig.height = 5}
+# słowa związane z machine learning
+ml_tags <- c("tensorflow", "pytorch", "nlp", "lstm", "cnn", "rnn", "spark", "hadoop", "hive", "python", "keras")
+
+# słowa związane z IT
+technologie <- c("java", "javascript", "apache", "basic", "vba", "excel", "access",
+                 "sql", ".net", "net", "git", "sharepoint", "asp.net", "asp", "angular", "oracle", "html", "mvc",
+                 "web", "bpm", "css", "php", "svn", "xml", "visual", "azure", "windows", "linux",
+                 "erp", "uml", "api", "flask", "aws", ml_tags)
+
+plt <- words %>%
+  filter(word %in% ml_tags) %>%
+  count(word) %>%
+  mutate(word = fct_reorder(word, n)) %>%
+  ggplot() +
+  geom_col(aes(word, n), fill = "lightgreen", color = "gray50", size = 0.1) +
+  coord_flip() +
+  labs(title = "Najpopularniejsze słowa związane z machine learning\nw ofertach pracy",
+       subtitle =  paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "")
+
+
+da_plot(plt)
+```
+
+
+```{r pracuj_11, fig.height = 8, fig.width = 12}
+plt <- words %>%
+  filter(word %in% technologie) %>%
+  unnest(tag) %>%
+  mutate(tag = if_else(tag %in% c("IT - Rozwój oprogramowania", "IT - Administracja",
+                                  "Badania i rozwój", "Finanse / Ekonomia", "Inżynieria",
+                                  "Bankowość", "Ubezpieczenia", "Internet / e-Commerce / Nowe media"),
+                       tag, "pozostałe")) %>%
+  count(word, tag) %>%
+  ggplot() +
+  geom_col(aes(word, n, fill = tag), color = "gray10", size = 0.1,
+           position = position_fill()) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0)) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = "Najpopularniejsze słowa związane z IT w ofertach pracy",
+       subtitle =  paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "", fill = "")
+
+da_plot(plt, legend_bottom = T)
+```
+
+# ogłoszenia ze słowami związanymi z ML
+
+```{r pracuj_12, fig.height = 5, fig.width = 10}
+# ogłoszenia ze słowami związanymi z ML
+ml_ids <- words %>% filter(word %in% ml_tags) %>% distinct(i) %>% pull(i)
+
+# z jakimi innymi słowami występują słowa związane z ML
+plt <- words_clean %>%
+  filter(i %in% ml_ids, word %in% technologie) %>%
+  unnest(tag) %>%
+  count(word, tag) %>%
+  group_by(word) %>%
+  mutate(t = sum(n)) %>%
+  ungroup() %>%
+  mutate(word = fct_reorder(word, -t)) %>%
+  ggplot() +
+  geom_col(aes(word, n, fill = tag), color = "gray50", size = 0.1) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0)) +
+  labs(title = "Najpopularniejsze słowa związane z IT\nw ofertach pracy zawierających słowa związane z ML",
+       subtitle =  paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "", fill = "")
+
+da_plot(plt, legend_bottom = T)
+```
+
+
+
+```{r pracuj_32, fig.width = 16, fig.height = 10}
+plt <- words_clean %>%
+  filter(i %in% ml_ids, word %in% technologie) %>%
+  unnest(tag) %>%
+  count(word, tag) %>%
+  pairwise_cor(word, tag, n, upper = FALSE, diag = TRUE) %>%
+  arrange(desc(item2)) %>%
+  mutate(item2 = fct_inorder(item2)) %>%
+  ggplot() +
+  geom_tile(aes(item1, item2, fill = correlation), color = "gray75") +
+  geom_text(aes(item1, item2, label = sprintf("%.2f", correlation),
+                color = if_else(correlation < 0.55, "white", "black")),
+            size = 3, show.legend = FALSE) +
+  scale_fill_viridis_c(option = "B") +
+  scale_color_manual(values = c("white" = "white", "black" = "black")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0)) +
+  labs(title = "Podobieństwo ofert pracy w zależności od branży",
+       subtitle =  paste0("Podobieństwo liczone jako korelacja liczby wystąpień słów.\nNa podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "", fill = "Współczynnik korelacji")
+
+da_plot(plt, legend_bottom = T)
+```
+
+```{r pracuj_15, fig.width = 16, fig.height = 10}
+# liczymy korelację liczby wystąpień poszczególnych słów pomiędzy kategoriami
+plt <- words_clean %>%
+  select(tag, word) %>%
+  unnest(tag) %>%
+  count(tag, word) %>%
+  pairwise_cor(tag, word, n, upper = FALSE, diag = TRUE) %>%
+  arrange(desc(item2)) %>%
+  mutate(item2 = fct_inorder(item2)) %>%
+  ggplot() +
+  geom_tile(aes(item1, item2, fill = correlation), color = "gray75") +
+  geom_text(aes(item1, item2, label = sprintf("%.2f", correlation),
+                color = if_else(correlation < 0.55, "white", "black")),
+            size = 3, show.legend = FALSE) +
+  scale_fill_viridis_c(option = "B") +
+  scale_color_manual(values = c("white" = "white", "black" = "black")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0)) +
+  labs(title = "Podobieństwo ofert pracy w zależności od branży",
+       subtitle =  paste0("Podobieństwo liczone jako korelacja liczby wystąpień słów.\nNa podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "", fill = "Współczynnik korelacji")
+
+da_plot(plt, legend_bottom = T)
+```
+
+# bi gramy
+
+```{r}
+biwords <- offers_pl %>%
+  select(grade, tag, body) %>%
+  unnest() %>%
+  mutate(body = str_replace_all(body, "\\.", " ")) %>%
+  unnest_tokens("word", body, token = "ngrams", n = 2) %>%
+  filter(!is.na(word)) %>%
+  # rozdzielenie bigramu na słowa
+  separate(word, c("word1", "word2"), sep = " ") %>%
+  # polskie stop words
+  filter(!word1 %in% pl_stop_words) %>%
+  filter(!word2 %in% pl_stop_words) %>%
+  # angielskie stop words
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word) %>%
+  # liczby
+  filter(is.na(as.numeric(word1))) %>%
+  filter(is.na(as.numeric(word2))) %>%
+  # zwłączenie w bigram
+  unite(word, word1, word2, sep = " ")
+
+biwords_cnt <- biwords %>%
+  count(tag, word)
+```
+
+```{r pracuj_13, fig.height = 10, fig.width = 8}
+plt <- biwords_cnt %>%
+  group_by(word) %>%
+  summarise(n = sum(n)) %>%
+  ungroup() %>%
+  top_n(50, n) %>%
+  mutate(word = fct_reorder(word, n)) %>%
+  ggplot() +
+  geom_col(aes(word, n), fill = "lightgreen", color = "gray50", size = 0.1) +
+  coord_flip() +
+  labs(title = "Najpopularniejsze bi-gramy w ofertach pracy",
+       subtitle =  paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "Liczba wystąpień")
+
+da_plot(plt)
+```
+
+
+```{r pracuj_16, fig.height = 8, fig.width = 10}
+# najpopulatniejsze bigramy dla IT
+plt <- biwords_cnt %>%
+  filter(str_detect(tag, "IT|Badania")) %>%
+  group_by(tag) %>%
+  mutate(p = n/sum(n)) %>%
+  ungroup() %>%
+  group_by(word) %>%
+  mutate(t = sum(n)) %>%
+  top_n(20, t) %>%
+  ungroup() %>%
+  arrange(t) %>%
+  mutate(word = fct_inorder(word)) %>%
+  ggplot() +
+  geom_col(aes(word, p, fill = tag), position = position_dodge(), color = "gray50", size = 0.1) +
+  coord_flip() +
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = "Popularnośc bi-gramów w ofertach pracy dla IT",
+       subtitle = paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "Procent ofert", fill = "Obszar")
+
+da_plot(plt, legend_bottom = T)
+```
+
+```{r}
+fragment <- function(f_string, f_pattern, f_size = 30) {
+  f_string <- str_to_lower(f_string)
+  f_pattern <- str_to_lower(f_pattern)
+  
+  loc <- str_locate_all(f_string, f_pattern)
+  
+  pad_all <- vector("character", length(f_string))
+  
+  for(i in 1:length(f_string)) {
+    pad_all[i] <- str_sub(f_string[i],
+                          loc[i] %>% unlist() %>% .[1] - f_size,
+                          loc[i] %>% unlist() %>% .[2] + f_size) %>%
+      str_replace_all(f_pattern, paste0("<b>", f_pattern, "</b>"))
+  }
+  
+  return(pad_all)
+}
+```
+
+```{r}
+offers_pl %>%
+  select(company, body) %>%
+  filter(str_detect(str_to_lower(body), "innowacyjne projekty")) %>%
+  mutate(pad = fragment(body, "innowacyjne projekty", 40)) %>%
+  select(company, pad) %>% 
+  distinct() %>% 
+  arrange(company) %>%
+  kable(escape = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 10) %>%
+  scroll_box(height = "300px")
+```
+
+```{r}
+offers_pl %>%
+  select(company, body) %>%
+  filter(str_detect(str_to_lower(body), "przyjazną atmosferę")) %>%
+  mutate(pad = fragment(body, "przyjazną atmosferę", 40)) %>%
+  select(company, pad) %>% 
+  distinct() %>% 
+  arrange(company) %>%
+  kable(escape = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 10) %>%
+  scroll_box(height = "300px")
+```
+
+
+```{r}
+offers_pl %>%
+  filter(str_detect(str_to_lower(body), "język r |języku r |języka r ")) %>%
+  select(company, title, body) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 10) %>%
+  scroll_box(height = "300px")
+```
+
+```{r}
+# bierzemy po top 100 najczęściej występujących słów w tagu
+words_pca <- words_clean %>%
+  select(tag, word) %>%
+  unnest(tag) %>%
+  count(tag, word) %>%
+  group_by(tag) %>%
+  mutate(p = -log10(n/sum(n))) %>%
+  top_n(100, p) %>%
+  ungroup()
+
+# szeroka tabela
+words_clean_mat <- words_pca %>%
+  select(-n) %>%
+  spread(tag, p, fill = 0)
+```
+
+Przy okazji - `spread()` okazuje się byc najwolniejszym sposobem na zamianę długiej tabeli w szeroką - porównanie znajdziecie [tutaj](https://r-posts.com/benchmarking-cast-in-r-from-long-data-frame-to-wide-matrix/)
+
+```{r}
+set.seed(2019) # dla powtarzalności wyników
+
+# pca
+pca <- princomp(words_clean_mat[, 2:ncol(words_clean_mat)])
+
+pca_df <- pca$scores %>%
+  as_tibble() %>%
+  select(Comp.1, Comp.2)
+```
+
+```{r pracuj_17, fig.height = 5}
+pca_df$cluster <- kmeans(pca_df[, 1:2], 4)$cluster
+
+plt <- pca_df %>%
+  ggplot() +
+  geom_point(aes(Comp.1, Comp.2, color = as.factor(cluster)), alpha = 0.7) +
+  labs(color = "cluster")
+
+da_plot(plt, legend_bottom = T)
+```
+
+```{r}
+pca_df$word <- words_clean_mat$word
+
+pca_df <- left_join(pca_df, words_pca, by = "word")
+```
+
+```{r pracuj_18, fig.height = 10, fig.width = 8}
+plt <- pca_df %>%
+  group_by(cluster, word) %>%
+  summarise(n = sum(n)) %>%
+  top_n(10, n) %>%
+  filter(n > 1) %>%
+  ungroup() %>%
+  ggplot() +
+  geom_col(aes(word, n), fill = "lightgreen", color = "gray10", size = 0.1) +
+  coord_flip() +
+  facet_wrap(~cluster, scales = "free") +
+  labs(x = "", y = "liczba wystąpień słowa")
+
+da_plot(plt)
+```
+
+```{r pracuj_19, fig.height = 10, fig.width = 8}
+plt <- pca_df %>%
+  count(tag, cluster) %>%
+  ggplot() +
+  geom_col(aes(tag, n, fill = as.factor(cluster)),
+           position = position_fill(), color = "gray50", size = 0.1) +
+  geom_hline(yintercept = c(0.25, 0.5, 0.75), color = "red") +
+  scale_y_continuous(labels = scales::percent) +
+  coord_flip() +
+  labs(x = "", y = "", fill = "cluster")
+
+da_plot(plt, legend_bottom = T)
+```
+
+
+
+```{r pracuj_20, fig.height = 5, fig.width = 8}
+plt <- offers_pl %>%
+  count(grade) %>% 
+  mutate(n = n/sum(n)) %>%
+  mutate(grade = fct_reorder(grade, n)) %>% 
+  ggplot() + 
+  geom_col(aes(grade, n), fill = "lightgreen", color = "gray50") +
+  coord_flip() +
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = "Liczba ogłoszeń według poziomu stanowiska",
+       subtitle = paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "Procent zebranych ogłoszeń")
+
+
+da_plot(plt)
+```
+
+```{r pracuj_21, fig.height = 10, fig.width = 8}
+plt <- offers_pl %>% 
+  count(woj, grade, sort = T) %>%
+  group_by(woj) %>%
+  mutate(p = n/sum(n)) %>%
+  ungroup() %>%
+  left_join(poland_map, by = c("woj" = "jpt_nazwa_")) %>%
+  ggplot() + 
+  geom_sf(data = poland_map, aes(geometry = geometry), fill = "white", color = "gray75") +
+  geom_sf(aes(geometry = geometry, fill = p), color = "gray75") +
+  facet_wrap(~grade) +
+  labs(title = "Liczba ogłoszeń według poziomu stanowiska",
+       subtitle = paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "Procent zebranych ogłoszeń")
+
+da_plot(plt)
+```
+
+```{r pracuj_22, fig.height = 8, fig.width = 10}
+plt <- offers_pl %>% 
+  mutate(title = str_to_lower(title)) %>%
+  count(title) %>% 
+  mutate(n = n/sum(n)) %>% 
+  top_n(20, n) %>%
+  mutate(title = fct_reorder(title, n)) %>% 
+  ggplot() + 
+  geom_col(aes(title, n), fill = "lightgreen", color = "gray50") +
+  coord_flip() +
+  scale_y_continuous(labels = scales::percent) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0)) +
+  labs(title = "Najpopularniejsze nazwy stanowisk",
+       subtitle = paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "Procent zebranych ogłoszeń")
+
+da_plot(plt)
+```
+
+```{r pracuj_23, fig.width = 16, fig.height = 18}
+plt <- offers_pl %>%
+  select(title, tag) %>%
+  unnest(tag) %>% 
+  mutate(title = str_to_lower(title)) %>%
+  count(title, tag) %>% 
+  group_by(tag) %>%
+  mutate(p = n/sum(n)) %>% 
+  filter(n > 2) %>% 
+  top_n(3, p) %>% 
+  ungroup() %>%
+  mutate(title = fct_reorder(paste0(title, " (", n, ")"), p)) %>% 
+  ggplot() + 
+  geom_col(aes(title, p), fill = "lightgreen", color = "gray50") +
+  coord_flip() + 
+  scale_y_continuous(labels = scales::percent) +
+  facet_wrap(~tag, scales = "free", ncol = 3) +
+  labs(title = "Liczba ogłoszeń według branży",
+       subtitle = paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "Procent zebranych ogłoszeń")
+
+
+da_plot(plt)
+```
+
+```{r pracuj_26, fig.height = 8, fig.width = 10}
+plt <- offers_pl %>%
+  filter(str_detect(str_to_lower(title), "scrum master|product owner|project manager|kierownik projektu")) %>%
+  unnest(tag) %>% 
+  filter(str_detect(tag, "IT|Badania")) %>%
+  count(title, tag) %>%
+  group_by(title) %>%
+  mutate(s = sum(n)) %>%
+  ungroup() %>%
+  mutate(title = fct_reorder(title, s)) %>%
+  ggplot() + 
+  geom_col(aes(title, n, fill = tag), color = "gray50") +
+  coord_flip() +
+  labs(title = "Liczba ogłoszeń według branży",
+       subtitle = paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "liczba ogłoszeń")
+
+
+da_plot(plt, legend_bottom = T)
+```
+
+```{r pracuj_27, fig.height = 8, fig.width = 12}
+plt <- offers_pl %>%
+  filter(str_detect(str_to_lower(title), "data analyst|data scientist|data engineer")) %>%
+  unnest(tag) %>%
+  count(title, tag) %>%
+  group_by(title) %>%
+  mutate(s = sum(n)) %>%
+  ungroup() %>%
+  mutate(title = fct_reorder(title, s)) %>%
+  ggplot() + 
+  geom_col(aes(title, n, fill = tag), color = "gray50") +
+  coord_flip() +
+  labs(title = "Liczba ogłoszeń według branży",
+       subtitle = paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "Procent zebranych ogłoszeń")
+
+da_plot(plt, legend_bottom = T)
+```
+
+
+```{r pracuj_24, fig.height = 8, fig.width = 8}
+plt <- offers_pl %>%
+  select(title, tag) %>% 
+  unnest(tag) %>% 
+  mutate(title = str_to_lower(title)) %>%
+  filter(str_detect(title, "data analyst|data scientist|data engineer")) %>%
+  count(title, tag, sort = T) %>%
+  ggplot() +
+  geom_tile(aes(tag, title, fill = as.factor(n)), color = "gray50") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0)) +
+  labs(title = "Liczba ogłoszeń według branży",
+       subtitle = paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "", fill = "Liczba ogłoszeń")
+
+
+da_plot(plt, legend_bottom = T)
+```
+
+
+```{r pracuj_25, fig.height = 6, fig.width = 8}
+plt <- offers_pl %>%
+  select(i, title) %>% 
+  filter(str_detect(str_to_lower(title), "data analyst|data scientist")) %>%
+  left_join(words_clean, by = "i") %>% 
+  count(title.x, word, sort = T) %>% 
+  filter(word %in% technologie) %>% 
+  ggplot() + 
+  geom_tile(aes(word, title.x, fill = as.factor(n)), color = "gray50") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0)) +
+  labs(title = "Liczba ogłoszeń według branży",
+       subtitle = paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "", fill = "Liczba ogłoszeń")
+
+da_plot(plt, legend_bottom = T)
+```
+
+
+Zarobki
+
+W przypadku **`r count(offers_pl, salary) %>% mutate(p = 100*n/sum(n)) %>% filter(salary == "empty") %>% pull(p) %>% round(3)` procent** ofert nie ma podanych informacji o proponowanych zarobkach. Zobaczmy jak to wygląda dla pozostałych.
+
+
+```{r pracuj_28}
+plt <- offers_pl %>%
+  count(salary) %>% 
+  mutate(n = n/sum(n)) %>%
+  filter(salary != "empty") %>%
+  mutate(salary = fct_rev(salary)) %>% 
+  ggplot() + 
+  geom_col(aes(salary, n), fill = "lightgreen", color = "gray50") +
+  coord_flip() +
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = "Procent ogłoszeń według podanego przedziału zarobków",
+       subtitle = paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "Procent zebranych ogłoszeń")
+
+
+da_plot(plt)
+```
+
+```{r pracuj_29, fig.height = 4, fig.width = 10}
+plt <- offers_pl %>%
+  filter(salary != "empty") %>%
+  count(salary, grade) %>% 
+  group_by(grade) %>%
+  mutate(n = 100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot() + 
+  geom_tile(aes(salary, grade, fill = n), color = "gray50", show.legend = FALSE) +
+  geom_text(aes(salary, grade, label = sprintf("%.f%%", n))) +
+  scale_fill_distiller(palette = "YlOrBr") +
+  labs(title = "Liczba ogłoszeń według stanowiska i poziomu zarobków\n(tylko oferty z podanym poziomem wynagrodzenia)",
+       subtitle = paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "")
+
+
+da_plot(plt)
+```
+
+```{r pracuj_30, fig.height = 8, fig.width = 10}
+plt <- offers_pl %>%
+  filter(salary != "empty") %>%
+  count(salary, woj) %>% 
+  group_by(woj) %>%
+  mutate(n = 100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot() + 
+  geom_tile(aes(salary, woj, fill = n), color = "gray50", show.legend = FALSE) +
+  geom_text(aes(salary, woj, label = sprintf("%.f%%", n))) +
+  scale_fill_distiller(palette = "YlOrBr") +
+  labs(title = "Liczba ogłoszeń według województwa i poziomu zarobków\n(tylko oferty z podanym poziomem wynagrodzenia)",
+       subtitle = paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "")
+
+da_plot(plt)
+```
+
+```{r pracuj_31, fig.height = 8, fig.width = 10}
+plt <- offers_pl %>%
+  filter(salary != "empty") %>%
+  unnest(tag) %>%
+  count(salary, tag) %>% 
+  group_by(tag) %>%
+  mutate(n = 100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot() + 
+  geom_tile(aes(salary, tag, fill = n), color = "gray50", show.legend = FALSE) +
+  geom_text(aes(salary, tag, label = sprintf("%.f%%", n))) +
+  scale_fill_distiller(palette = "YlOrBr") +
+  labs(title = "Liczba ogłoszeń według branży",
+       subtitle = paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-10.02.2019 r."),
+       x = "", y = "Procent zebranych ogłoszeń")
+
+da_plot(plt)
+```
+
+
+Specjalista 15k+?
+
+```{r}
+offers_pl %>%
+  filter(grade == "Specjalista", salary == "powyżej 15 tys.") %>%
+  unnest(tag) %>%
+  count(tag, title, company, sort = TRUE) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                font_size = 10) %>%
+  scroll_box(height = "300px")
+```

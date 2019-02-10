@@ -536,9 +536,9 @@ ml_tags <- c("tensorflow", "pytorch", "nlp", "lstm", "cnn", "rnn", "spark", "had
 
 # słowa związane z IT
 technologie <- c("java", "javascript", "apache", "basic", "vba", "excel", "access",
-                 "sql", ".net", "net", "git", "sharepoint", "asp.net", "asp", "angular", "oracle", "html", "mvc",
+                 "sql", "net", "git", "sharepoint", "asp.net", "asp", "angular", "oracle", "html", "mvc",
                  "web", "bpm", "css", "php", "svn", "xml", "visual", "azure", "windows", "linux",
-                 "erp", "uml", "api", "flask", "aws", ml_tags)
+                 "erp", "uml", "api", "flask", "shiny", "aws", ml_tags)
 
 plt <- words %>%
   filter(word %in% ml_tags) %>%
@@ -606,7 +606,8 @@ da_plot(plt, legend_bottom = T)
 
 ```{r pracuj_32, fig.width = 16, fig.height = 10}
 plt <- words_clean %>%
-  filter(i %in% ml_ids, word %in% technologie) %>%
+  filter(i %in% ml_ids) %>%
+  filter(word %in% technologie) %>%
   unnest(tag) %>%
   count(word, tag) %>%
   pairwise_cor(word, tag, n, upper = FALSE, diag = TRUE) %>%
@@ -626,6 +627,22 @@ plt <- words_clean %>%
        x = "", y = "", fill = "Współczynnik korelacji")
 
 da_plot(plt, legend_bottom = T)
+```
+
+
+```{r}
+words_clean %>%
+  filter(word %in% technologie) %>%
+  unnest(tag) %>%
+  count(word, tag) %>%
+  pairwise_cor(word, tag, n, upper = T, diag = F) %>%
+  group_by(item1) %>% 
+  top_n(3, correlation) %>% 
+  ungroup() %>%
+  arrange(item1, desc(correlation)) %>%
+  kable(escape = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 10) %>%
+  scroll_box(height = "300px")
 ```
 
 ```{r pracuj_15, fig.width = 16, fig.height = 10}
@@ -1042,8 +1059,10 @@ plt <- offers_pl %>%
   filter(salary != "empty") %>%
   count(salary, grade) %>% 
   group_by(grade) %>%
+  mutate(c = sum(n)) %>%
   mutate(n = 100*n/sum(n)) %>%
   ungroup() %>%
+  mutate(grade = paste0(grade, " (", c, ")")) %>%
   ggplot() + 
   geom_tile(aes(salary, grade, fill = n), color = "gray50", show.legend = FALSE) +
   geom_text(aes(salary, grade, label = sprintf("%.f%%", n))) +
@@ -1061,8 +1080,10 @@ plt <- offers_pl %>%
   filter(salary != "empty") %>%
   count(salary, woj) %>% 
   group_by(woj) %>%
+  mutate(c = sum(n)) %>%
   mutate(n = 100*n/sum(n)) %>%
   ungroup() %>%
+  mutate(woj = paste0(woj, " (", c, ")")) %>%
   ggplot() + 
   geom_tile(aes(salary, woj, fill = n), color = "gray50", show.legend = FALSE) +
   geom_text(aes(salary, woj, label = sprintf("%.f%%", n))) +
@@ -1074,14 +1095,16 @@ plt <- offers_pl %>%
 da_plot(plt)
 ```
 
-```{r pracuj_31, fig.height = 8, fig.width = 10}
+```{r pracuj_31, fig.height = 10, fig.width = 10}
 plt <- offers_pl %>%
   filter(salary != "empty") %>%
   unnest(tag) %>%
   count(salary, tag) %>% 
   group_by(tag) %>%
+  mutate(c = sum(n)) %>%
   mutate(n = 100*n/sum(n)) %>%
   ungroup() %>%
+  mutate(tag = paste0(tag, " (", c, ")")) %>%
   ggplot() + 
   geom_tile(aes(salary, tag, fill = n), color = "gray50", show.legend = FALSE) +
   geom_text(aes(salary, tag, label = sprintf("%.f%%", n))) +

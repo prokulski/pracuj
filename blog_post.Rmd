@@ -159,6 +159,7 @@ rm(offers)
 
 Łącznie mamy `r n_pl_offers` ofert z pracą na terenie Polski (z `r n_offers` wszystkich). Dane zgromadzone zostały w dniach 8-12.02.2019 r.
 
+
 ### Liczba ofert według województwa
 
 W pierwszej kolejności sprawdźmy w jakich województwach jest najwięcej ofert pracy.
@@ -245,6 +246,7 @@ Najwięcej pracy jest w sprzedaży (około 18.2%) i obsłudze klienta (13.4%). M
 
 W dalszej kolejności mamy Inżynierię (co jest dla mnie zaskoczeniem) oraz pracę fizyczną (to nie jest zaskoczenie). Ogólnie rzecz biorąc większy jest popyt na pracowników nisko i średnio wykwalifikowanych - pracy prostej jest dużo.
 
+
 ### Najpopularniejsze kategorie w województwach
 
 Podzielimy kategorie oferowanej pracy według województw:
@@ -327,7 +329,8 @@ da_plot(plt, legend_bottom = T)
 
 Na powyższym obrazku procenty dla każdej kategorii w ramach województwa (kolumna) sumują się do 100%. Z ciekawostek należy wymienić przede wszystkim brak pracy w Public Relations w lubelskim, opolski, podkarpackim, warmińsko-mazurskim oraz zachodniopomorskim. Czyżby to wpływ tego, że centrale firm (i co za tym idzie działy PR czy marketingu) umiejscowione były głównie w Warszawie (tutaj mamy największy udział PR w ofertach z danego województwa)?
 
-### Najpopularniejsze województwa według kategorii
+
+### Najpopularniejsze województwa dla kategorii
 
 Spójrzmy na powyższą *mapę* w przekroju per branża - w jakim województwie jest najwięcej pracy dla prawników? A dla osób zajmujących się branżą e-commerce?
 
@@ -560,16 +563,16 @@ Słownik nazw stanowisk jest dość szeroki, ale gdyby sprowadzić nazwy stanowi
 
 ```{r}
 offers_pl %>%
+    filter(str_detect(str_to_lower(title), "scrum master|product owner|project manager|kierownik projektu")) %>%
+    mutate(title = str_to_lower(title)) %>%
   select(title) %>%
-  mutate(tilte = str_to_lower(title)) %>%
-  filter(str_detect(title, "scrum master|product owner|project manager|kierownik projektu")) %>%
   mutate(title = case_when(
     str_detect(title, "scrum master") ~ "scrum master",
     str_detect(title, "product owner") ~ "product owner",
     str_detect(title, "project manager|kierownik projektu") ~ "project manager",
     TRUE ~ "pozostałe"
   )) %>%
-  count(title) %>%
+  count(title, sort = T) %>%
   set_names(c("Stanowisko (grupa)", "Liczba ofert")) %>%
   kable() %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
@@ -658,7 +661,7 @@ da_plot(plt)
 
 Dominuje zakres 2-6 tys. brutto. Za chwilę zobaczymy trochę więcej informacji o zarobkach.
 
-### Zarobki versus poziom stanowiska
+### Zarobki a poziom stanowiska
 
 W ofertach zarobki podawane są jako przedziały oferowanej płacy brutto. Słupki słupkami, ale jak wyglądają zarobki w poszczególnych branżach?
 
@@ -739,7 +742,7 @@ plt <- offers_pl %>%
   scale_fill_distiller(palette = "YlOrBr") +
   labs(title = "Podział ogłoszeń według branży i poziomu zarobków\n(tylko oferty z podanym poziomem wynagrodzenia)",
        subtitle = paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-12.02.2019 r."),
-       x = "", y = "Procent zebranych ogłoszeń")
+       x = "", y ="")
 
 da_plot(plt)
 ```
@@ -756,7 +759,7 @@ offers_pl %>%
   filter(grade == "Specjalista", salary == "powyżej 15 tys.") %>%
   unnest(tag) %>%
   count(tag, title, company) %>%
-  arrange(tag, companym, desc(n)) %>%
+  arrange(tag, company, desc(n)) %>%
   set_names(c("Kategoria", "Nazwa stanowiska", "Firma", "Liczba ofert")) %>%
   kable() %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
@@ -775,7 +778,7 @@ Przejdźmy teraz do analizy treści ofert. Do tej pory przeanalizowaliśmy metad
 
 Jakie słowa występują najczęściej? Treść wszystkich ogłoszeń została rozbita na pojedyncze słowa, sprowadzone do wersji podstawowych (słownik jest ułomny) i usunięto wszystkie liczby. Zostają nam najpopularniejsze:
 
-```{r pracuj_20,fig.height = 6, fig.width = 10}
+```{r}
 words <- offers_pl %>%
   unnest_tokens("word", body, token = "words")
 
@@ -793,7 +796,8 @@ words_clean <- words %>%
   select(-word) %>%
   rename(word = stem) %>%
   filter(!is.na(word))
-
+```
+```{r pracuj_20,fig.height = 6, fig.width = 10}
 plt <- words_clean %>%
   count(word) %>%
   top_n(50, n) %>%
@@ -808,7 +812,7 @@ plt <- words_clean %>%
 da_plot(plt)
 ```
 
-Aby oderwać się od bezwzględnych liczb policzyłem ile razy (średnio) dane słowo występuje w ofercie pracy. Najczęściej mówi się o **pracy** ("poszukujemy do pracy", "do twoich zadań podczas pracy", "dajemy możliwość pracy", itd.) co nie jest zaskakujące.
+Aby oderwać się od bezwzględnych liczb policzyłem ile razy (średnio) dane słowo występuje w ofercie pracy. Najczęściej mówi się o **pracy** (*poszukujemy do pracy*, *do twoich zadań podczas pracy*, *dajemy możliwość pracy*, itd.) co nie jest zaskakujące.
 
 Druga grupa to **umiejętności**, **znajomość** i **doświadczenie**, **wykształcenie** - czyli to, co potrafisz i co jest potrzebne. Najlepiej **mile widzieć** (czyli *mile widziane*).
 
@@ -832,7 +836,7 @@ plt <- words %>%
   coord_flip() +
   labs(title = "Najpopularniejsze słowa związane z machine learning\nw ofertach pracy",
        subtitle =  paste0("Na podstawie ", n_pl_offers, " ofert zgromadzonych z serwisu Pracuj.pl w dniach 8-12.02.2019 r."),
-       x = "", y = "")
+       x = "", y = "Liczba ofert")
 
 da_plot(plt)
 ```
@@ -1018,7 +1022,7 @@ Chociaż miara współwystępowania technologii jest prosta to wydaje się być 
 
 Jak czytelnicy mojego bloga już wiedzą bigramy to dwuwyrazowe zbitki słów. Dzielimy tekst "Ala ma kota" na bigramy i dostajemy dwie pary: "Ala ma" oraz "ma kota". To są właśnie bigramy. Jakie są najpopularniejsze w ofertach pracy?
 
-```{r pracuj_26, fig.height = 10, fig.width = 8}
+```{r}
 biwords <- offers_pl %>%
   select(grade, tag, body) %>%
   unnest() %>%
@@ -1047,7 +1051,8 @@ biwords_cnt_max <- biwords_cnt %>%
   summarise(n = sum(n)) %>%
   ungroup() %>%
   top_n(50, n)
-
+```
+```{r pracuj_26, fig.height = 10, fig.width = 8}
 plt <- biwords_cnt_max %>%
   mutate(word = fct_reorder(word, n)) %>%
   ggplot() +
@@ -1227,7 +1232,7 @@ offers_pl %>%
 Wybrałem specjalnie po kilkadziesiąt znaków otaczających poszukiwany zwrot. Prawda, że wszędzie ten sam tekst?
 
 
-## Język R & Shiny
+# Język R & Shiny
 
 Wcześniej przeczytaliście już, że dla badaczy danych mus to Python, ale co z językiem R? Znalazłem 4 oferty, w których **R** jest wymieniony:
 

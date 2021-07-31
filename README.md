@@ -2,7 +2,7 @@
 
 Repo dla wpisu na blogu https://blog.prokulski.science/index.php/2019/02/18/analiza-ofert-pracy/
 
-Zawartość:
+Zawartość repo:
 
 * skrypt grab_index.R służący do zebrania listy ogłoszeń pojawiających się na indeksie (zbieramy najpierw linki do ogłoszeń)
 * skrypt grab_offers.R służący do zebrania treści ogłoszeń na podstawie zebranych linków

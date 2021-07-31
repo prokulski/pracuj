@@ -5,7 +5,9 @@ library(httr)
 
 base_page_url <- "https://www.pracuj.pl/praca?pn="
 
+# tym parametrem można sterować - trzeba sprawdzić jak to wygląda na stronie
 N_pages <- 759
+
 
 safe_read_html <- function(f_url) {
   t_page <- GET(f_url,
